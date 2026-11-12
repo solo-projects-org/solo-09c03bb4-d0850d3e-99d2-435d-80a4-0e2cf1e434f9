@@ -8,6 +8,13 @@
 - 飞行时长（落地 - 起飞）必须落在闭区间 [duration_min_minutes, duration_max_minutes]；
 - 同一机尾按 seq 升序链接：下一段起飞不得早于上一段落地（相等允许）；
 - 整链恰好唯一解才允许导出；无解展示冲突航段，多解展示可行候选。
+
+大序号说明
+----------
+seq 支持 64 位有符号整数。JSON 中 `seq` 保持数值类型不变（批处理调用方
+不受影响）；同时为前端附加 `seq_str` 十进制字符串字段，避免浏览器
+Number（IEEE 754 双精度）在 |seq| > 2^53 时丢失精度、把相邻大序号
+显示成同一个数。
 """
 from __future__ import annotations
 
@@ -297,6 +304,7 @@ def analyze_conflict(segments: list) -> dict:
             return {
                 "type": "duration_window",
                 "segment_seq": seg.seq,
+                "segment_seq_str": str(seg.seq),
                 "row": seg.row_number,
                 "message": (
                     f"航段 seq={seg.seq}（第 {seg.row_number} 行）没有任何 "
@@ -314,6 +322,7 @@ def analyze_conflict(segments: list) -> dict:
             return {
                 "type": "chain_order",
                 "segment_seq": seg.seq,
+                "segment_seq_str": str(seg.seq),
                 "row": seg.row_number,
                 "message": (
                     f"航段 seq={seg.seq}（第 {seg.row_number} 行）无法衔接："
@@ -326,8 +335,8 @@ def analyze_conflict(segments: list) -> dict:
         prev_arrs = sorted({c.arr_utc for c in reachable})
     # 理论上不会走到这里（前向可达非空 ⇔ 存在完整解）
     return {"type": "unknown", "message": "未能定位冲突", "segment_seq": None,
-            "row": None, "dep_candidates": [], "arr_candidates": [],
-            "previous_arrival_candidates": []}
+            "segment_seq_str": None, "row": None, "dep_candidates": [],
+            "arr_candidates": [], "previous_arrival_candidates": []}
 
 
 # ---------------------------------------------------------------------------
@@ -338,6 +347,7 @@ def _segment_view(seg: Segment) -> dict:
     return {
         "row": seg.row_number,
         "seq": seg.seq,
+        "seq_str": str(seg.seq),  # 十进制字符串，供前端精确显示大序号
         "dep_local": seg.dep_local_raw,
         "dep_tz": seg.dep_tz,
         "arr_local": seg.arr_local_raw,
@@ -356,7 +366,8 @@ def _segment_view(seg: Segment) -> dict:
 
 def _solution_view(solution, segments) -> list:
     return [
-        {"seq": seg.seq, "dep_utc": iso(c.dep_utc), "arr_utc": iso(c.arr_utc),
+        {"seq": seg.seq, "seq_str": str(seg.seq),
+         "dep_utc": iso(c.dep_utc), "arr_utc": iso(c.arr_utc),
          "duration_minutes": _fmt_duration(c.duration_minutes)}
         for seg, c in zip(segments, solution)
     ]

@@ -9,7 +9,10 @@ from fastapi.responses import FileResponse, Response
 from .solver import CsvFormatError, build_export_csv, solve_csv
 
 BASE_DIR = Path(__file__).resolve().parent
-SAMPLE_PATH = BASE_DIR.parent / "samples" / "dst_sample.csv"
+SAMPLES = {
+    "dst": ("dst_sample.csv", "夏令时样例"),
+    "big_seq": ("big_seq_sample.csv", "64 位大序号样例"),
+}
 INDEX_PATH = BASE_DIR / "static" / "index.html"
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
 
@@ -32,10 +35,15 @@ async def index():
 
 
 @app.get("/api/sample", include_in_schema=False)
-async def sample():
-    """内置夏令时样例，可直接下载或在前端一键载入。"""
-    return FileResponse(SAMPLE_PATH, media_type="text/csv; charset=utf-8",
-                        filename="dst_sample.csv")
+async def sample(name: str = "dst"):
+    """内置样例，可直接下载或在前端一键载入。默认夏令时样例；name=big_seq 为大序号样例。"""
+    entry = SAMPLES.get(name)
+    if entry is None:
+        raise HTTPException(404, f"未知样例: {name!r}（可选: {', '.join(SAMPLES)}）")
+    filename, _title = entry
+    return FileResponse(BASE_DIR.parent / "samples" / filename,
+                        media_type="text/csv; charset=utf-8",
+                        filename=filename)
 
 
 @app.post("/api/solve")
