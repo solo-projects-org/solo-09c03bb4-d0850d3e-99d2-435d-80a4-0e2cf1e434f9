@@ -9,7 +9,8 @@
 docker compose up --build
 ```
 
-浏览器打开 <http://localhost:8000> ，点击「📦 载入内置夏令时样例」→「开始清洗」即可看到完整演示。
+浏览器打开 <http://localhost:8000> ，点击「📦 载入内置夏令时样例」→「开始清洗」即可看到完整演示；
+点击「🔢 载入大序号(int64)样例」可验证 64 位航段序号的精确展示与唯一解高亮。
 
 本地开发（不用 Docker）：
 
@@ -20,6 +21,8 @@ uvicorn app.main:app --reload --port 8000
 ```
 
 自检（仅标准库）：`python3 tests/test_solver.py`
+前端语义/渲染自检（需 Node）：
+`node tests/frontend_seq_check.mjs <payload.json>`、`node tests/render_smoke.mjs app/static/index.html <payload.json>`
 
 ## 输入 CSV 格式
 
@@ -33,10 +36,22 @@ B-7001,1,2026-10-25 00:30,Europe/London,2026-10-25 02:15,Europe/Berlin,90,130
 | 列 | 含义 |
 | --- | --- |
 | `tail_number` | 机尾号（同一机尾构成一条航段链） |
-| `seq` | 航段顺序，整数，同一机尾内唯一，按升序链接 |
+| `seq` | 航段顺序，**64 位有符号整数**（范围 −9223372036854775808 ~ 9223372036854775807），同一机尾内唯一，按升序链接 |
 | `dep_local` / `arr_local` | 起飞/落地当地时间，`YYYY-MM-DD HH:MM`（也接受 `T` 分隔与秒） |
 | `dep_tz` / `arr_tz` | 两端 IANA 时区名，如 `Europe/Berlin`、`America/New_York` |
 | `duration_min_minutes` / `duration_max_minutes` | 飞行时长下/上限（分钟，**闭区间**） |
+
+### 大序号（int64）的精度处理
+
+JavaScript 的 `Number` 只能精确表示到 2^53−1，地服使用 64 位整数序号时，相邻大序号经
+JSON number 传输后会在页面上舍入成同一个数，并导致唯一解的选定时刻高亮错位/漏标。
+本工具的处理方式：
+
+- `/api/solve` 的**默认 JSON 字段与类型保持不变**（`seq`、`segment_seq` 仍是 number，批处理调用不受影响）；
+- 后端在每个含序号的对象上**新增**十进制字符串字段 `seq_text`（冲突对象为 `segment_seq_text`），
+  前端航段明细表、候选链、冲突提示、唯一解高亮映射全部使用字符串字段，保证逐位精确；
+- 服务端对 `seq` 做 64 位有符号整数范围校验，越界按行级错误处理并禁止导出；
+- 导出 CSV 中的 `seq` 列由 Python 直接写出完整十进制整数，与页面唯一解逐段相符。
 
 ## 求解规则
 
@@ -58,7 +73,9 @@ B-7001,1,2026-10-25 00:30,Europe/London,2026-10-25 02:15,Europe/Berlin,90,130
 - 导出列：`tail_number,seq,dep_utc,arr_utc,duration_minutes`（UTC 为 ISO 8601 `Z` 格式）；
 - 服务端在导出时会**重新求解并复核唯一性**，非唯一解返回 409，杜绝误导出。
 
-## 内置样例（samples/dst_sample.csv）
+## 内置样例（samples/）
+
+### dst_sample.csv（夏令时场景）
 
 | 机尾 | 场景 | 期望结果 |
 | --- | --- | --- |
@@ -68,13 +85,22 @@ B-7001,1,2026-10-25 00:30,Europe/London,2026-10-25 02:15,Europe/Berlin,90,130
 | B-7004 | 起降均为重复时刻，区间宽松 | 多解（2 条候选链） |
 | B-7005 | 美国拨回日（纽约/洛杉矶/丹佛） | 唯一解，可导出 |
 
+### big_seq_sample.csv（大序号 int64 场景）
+
+| 机尾 | 序号（节选） | 场景 | 期望结果 |
+| --- | --- | --- | --- |
+| L-1001 | `9007199254740992` / `9007199254740993` / `9223372036854775807` | 前两个序号在 JS Number 下碰撞，末个为 int64 上界；拨回日三连段 | 唯一解，三段 ✔ 高亮齐全，可导出 |
+| L-1002 | `9223372036854775805` / `9223372036854775806` | 链断裂，冲突提示显示精确十进制序号 | 无解，禁止导出 |
+| L-1003 | `9007199254740994` / `9007199254740995` | 起降均为重复时刻 | 多解（2 条候选链），禁止导出 |
+
 ## API
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | `GET` | `/` | 网页入口 |
-| `GET` | `/api/sample` | 下载内置样例 CSV |
-| `POST` | `/api/solve` | 上传 CSV（multipart 字段 `file`），返回逐机尾求解结果 JSON |
+| `GET` | `/api/sample` | 下载内置夏令时样例 CSV |
+| `GET` | `/api/sample/big-seq` | 下载大序号（int64）样例 CSV |
+| `POST` | `/api/solve` | 上传 CSV（multipart 字段 `file`），返回逐机尾求解结果 JSON；`seq` 仍为 number，另附同值字符串 `seq_text` 供前端精确展示 |
 | `POST` | `/api/export` | 字段 `file` + `tail`（`__all__` 表示全部可导出机尾），返回 UTC CSV；非唯一解 409 |
 | `GET` | `/docs` | FastAPI 自动文档 |
 
@@ -84,8 +110,16 @@ B-7001,1,2026-10-25 00:30,Europe/London,2026-10-25 02:15,Europe/Berlin,90,130
 app/
   main.py            # FastAPI 路由
   solver.py          # 候选生成 + 整链求解 + 冲突定位（纯标准库）
-  static/index.html  # 单页前端
-samples/dst_sample.csv
-tests/test_solver.py
+  static/index.html  # 单页前端（Chromium 120 兼容，序号一律走字符串字段）
+samples/dst_sample.csv      # 夏令时样例
+samples/big_seq_sample.csv  # 大序号 int64 样例
+tests/test_solver.py        # Python 自检（标准库）
+tests/frontend_seq_check.mjs  # 前端 JS 序号精度/高亮语义检查（Node）
+tests/render_smoke.mjs        # 页面渲染冒烟测试（Node + DOM 桩）
 Dockerfile / docker-compose.yml / requirements.txt
 ```
+
+## 浏览器兼容性
+
+前端不使用 Chromium 120 之后的语法/API（仅 ES2017 级特性、`fetch`、`FormData`、
+`URL.createObjectURL`、可选链等 Chromium 120 已支持的能力），在 Chromium 120 及以上可直接运行。

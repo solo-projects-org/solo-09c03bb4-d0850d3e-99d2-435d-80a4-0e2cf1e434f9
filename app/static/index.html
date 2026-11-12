@@ -91,6 +91,7 @@
     <div class="upload-bar">
       <input type="file" id="fileInput" accept=".csv,text/csv">
       <button class="secondary" id="sampleBtn">📦 载入内置夏令时样例</button>
+      <button class="secondary" id="bigSeqSampleBtn">🔢 载入大序号(int64)样例</button>
       <button id="solveBtn" disabled>开始清洗</button>
       <span class="file-name" id="fileName">未选择文件</span>
       <span class="spacer"></span>
@@ -103,7 +104,7 @@
       <ul>
         <li><code>dep_local / arr_local</code>：当地时间，格式 <code>YYYY-MM-DD HH:MM</code>（不含时区偏移）；</li>
         <li><code>dep_tz / arr_tz</code>：IANA 时区名，如 <code>Europe/Berlin</code>、<code>America/New_York</code>；</li>
-        <li><code>duration_*</code>：飞行时长下/上限（分钟，闭区间）；<code>seq</code> 为同一机尾内的航段顺序（整数，从 1 起）。</li>
+        <li><code>duration_*</code>：飞行时长下/上限（分钟，闭区间）；<code>seq</code> 为同一机尾内的航段顺序（64 位有符号整数，从 1 起；页面按十进制字符串精确展示，不受 JS 数字精度影响）。</li>
       </ul>
       <ul>
         <li>当地时间不存在（春季拨快空洞）→ 该行报错，整架机尾禁止导出；</li>
@@ -142,14 +143,18 @@ $('fileInput').addEventListener('change', (e) => {
   $('solveBtn').disabled = !currentFile;
 });
 
-$('sampleBtn').addEventListener('click', async () => {
-  const resp = await fetch('/api/sample');
+$('sampleBtn').addEventListener('click', () => loadSample('/api/sample', 'dst_sample.csv'));
+$('bigSeqSampleBtn').addEventListener('click',
+  () => loadSample('/api/sample/big-seq', 'big_seq_sample.csv'));
+
+async function loadSample(url, name) {
+  const resp = await fetch(url);
   const blob = await resp.blob();
-  currentFile = new File([blob], 'dst_sample.csv', {type: 'text/csv'});
-  $('fileName').textContent = '已载入内置样例 dst_sample.csv';
+  currentFile = new File([blob], name, {type: 'text/csv'});
+  $('fileName').textContent = '已载入内置样例 ' + name;
   $('solveBtn').disabled = false;
   $('fileInput').value = '';
-});
+}
 
 $('solveBtn').addEventListener('click', async () => {
   hideGlobalError();
@@ -219,12 +224,12 @@ function renderTail(t) {
 function segTable(t, chosenPairs) {
   const chosen = chosenPairs || {};
   const rows = t.segments.map(seg => {
-    const depC = seg.dep_candidates.map(c => candHtml(c, chosen[seg.seq], 'dep')).join('<br>');
-    const arrC = seg.arr_candidates.map(c => candHtml(c, chosen[seg.seq], 'arr')).join('<br>');
+    const depC = seg.dep_candidates.map(c => candHtml(c, chosen[seg.seq_text], 'dep')).join('<br>');
+    const arrC = seg.arr_candidates.map(c => candHtml(c, chosen[seg.seq_text], 'arr')).join('<br>');
     const depAmb = seg.dep_candidates.length > 1 ? ' <span class="cand">⧉重复</span>' : '';
     const arrAmb = seg.arr_candidates.length > 1 ? ' <span class="cand">⧉重复</span>' : '';
     return `<tr>
-      <td>${seg.seq}</td>
+      <td>${esc(seg.seq_text)}</td>
       <td>${esc(seg.dep_local)}<br><span class="note">${esc(seg.dep_tz)}</span>${depAmb}</td>
       <td>${esc(seg.arr_local)}<br><span class="note">${esc(seg.arr_tz)}</span>${arrAmb}</td>
       <td>[${seg.dur_min}, ${seg.dur_max}]</td>
@@ -244,12 +249,12 @@ function candHtml(utc, chosenPair, kind) {
 
 function renderUnique(t) {
   const chosen = {};
-  t.solution.forEach(s => { chosen[s.seq] = {dep: s.dep_utc, arr: s.arr_utc}; });
+  t.solution.forEach(s => { chosen[s.seq_text] = {dep: s.dep_utc, arr: s.arr_utc}; });
   const solRows = t.solution.map(s =>
-    `<tr><td>${s.seq}</td><td>${s.dep_utc}</td><td>${s.arr_utc}</td><td>${s.duration_minutes}</td></tr>`
+    `<tr><td>${esc(s.seq_text)}</td><td>${esc(s.dep_utc)}</td><td>${esc(s.arr_utc)}</td><td>${esc(s.duration_minutes)}</td></tr>`
   ).join('');
   return `
-    <p class="note">整链存在唯一解，✔ 为最终入仓时刻：</p>
+    <p class="note">整链存在唯一解，✔ 为最终入仓时刻（与导出 CSV 逐段一致）：</p>
     ${segTable(t, chosen)}
     <h4 style="margin:14px 0 4px">导出内容（UTC）</h4>
     <table><thead><tr><th>seq</th><th>dep_utc</th><th>arr_utc</th><th>时长(分)</th></tr></thead>
@@ -261,7 +266,7 @@ function renderNoSolution(t) {
   const prev = (c.previous_arrival_candidates || []).map(x => `<li>${esc(x)}</li>`).join('');
   return `
     <div class="conflict-box">
-      <b>⛔ 冲突航段：seq=${c.segment_seq}（第 ${c.row} 行）</b><br>${esc(c.message)}
+      <b>⛔ 冲突航段：seq=${esc(c.segment_seq_text)}（第 ${esc(c.row)} 行）</b><br>${esc(c.message)}
       ${prev ? `<div class="note">上一段落地候选：<ul style="margin:4px 0">${prev}</ul></div>` : ''}
     </div>
     <p class="note">各航段候选如下（⧉ 表示夏令时拨回产生的重复时刻，两个候选均参与求解）：</p>
@@ -272,7 +277,7 @@ function renderMultiple(t) {
   const n = t.solution_count + (t.solution_count_truncated ? '+' : '');
   const blocks = t.solutions.map((sol, i) => {
     const rows = sol.map(s =>
-      `<tr><td>${s.seq}</td><td>${s.dep_utc}</td><td>${s.arr_utc}</td><td>${s.duration_minutes}</td></tr>`
+      `<tr><td>${esc(s.seq_text)}</td><td>${esc(s.dep_utc)}</td><td>${esc(s.arr_utc)}</td><td>${esc(s.duration_minutes)}</td></tr>`
     ).join('');
     return `<div class="sol-block"><h4>候选链 #${i + 1}</h4>
       <table><thead><tr><th>seq</th><th>dep_utc</th><th>arr_utc</th><th>时长(分)</th></tr></thead>

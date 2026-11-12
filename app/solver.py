@@ -40,6 +40,10 @@ SOLUTION_CAP = 200
 # 多解时返回给前端展示的候选条数
 MAX_DISPLAY_SOLUTIONS = 20
 
+# 地服以 64 位有符号整数作为航段序号，超出此范围直接判数据错误
+INT64_MIN = -(2 ** 63)
+INT64_MAX = 2 ** 63 - 1
+
 
 class CsvFormatError(Exception):
     """CSV 整体无法解析（缺列、空文件等）。"""
@@ -200,6 +204,11 @@ def build_segment(raw: RawRow):
     except ValueError:
         errors.append(f"seq 不是整数: {raw.seq_raw!r}")
         seq = None
+    if seq is not None and not INT64_MIN <= seq <= INT64_MAX:
+        errors.append(
+            f"seq 超出 64 位有符号整数范围 [{INT64_MIN}, {INT64_MAX}]: "
+            f"{raw.seq_raw!r}，请与地服核对序号规则")
+        seq = None
 
     dur_min = _parse_minutes(raw.dur_min_raw)
     dur_max = _parse_minutes(raw.dur_max_raw)
@@ -297,6 +306,7 @@ def analyze_conflict(segments: list) -> dict:
             return {
                 "type": "duration_window",
                 "segment_seq": seg.seq,
+                "segment_seq_text": str(seg.seq),
                 "row": seg.row_number,
                 "message": (
                     f"航段 seq={seg.seq}（第 {seg.row_number} 行）没有任何 "
@@ -314,6 +324,7 @@ def analyze_conflict(segments: list) -> dict:
             return {
                 "type": "chain_order",
                 "segment_seq": seg.seq,
+                "segment_seq_text": str(seg.seq),
                 "row": seg.row_number,
                 "message": (
                     f"航段 seq={seg.seq}（第 {seg.row_number} 行）无法衔接："
@@ -326,8 +337,8 @@ def analyze_conflict(segments: list) -> dict:
         prev_arrs = sorted({c.arr_utc for c in reachable})
     # 理论上不会走到这里（前向可达非空 ⇔ 存在完整解）
     return {"type": "unknown", "message": "未能定位冲突", "segment_seq": None,
-            "row": None, "dep_candidates": [], "arr_candidates": [],
-            "previous_arrival_candidates": []}
+            "segment_seq_text": None, "row": None, "dep_candidates": [],
+            "arr_candidates": [], "previous_arrival_candidates": []}
 
 
 # ---------------------------------------------------------------------------
@@ -338,6 +349,8 @@ def _segment_view(seg: Segment) -> dict:
     return {
         "row": seg.row_number,
         "seq": seg.seq,
+        # 十进制字符串：供前端精确展示 int64 序号，规避 JS Number 精度损失
+        "seq_text": str(seg.seq),
         "dep_local": seg.dep_local_raw,
         "dep_tz": seg.dep_tz,
         "arr_local": seg.arr_local_raw,
@@ -356,7 +369,9 @@ def _segment_view(seg: Segment) -> dict:
 
 def _solution_view(solution, segments) -> list:
     return [
-        {"seq": seg.seq, "dep_utc": iso(c.dep_utc), "arr_utc": iso(c.arr_utc),
+        {"seq": seg.seq,
+         "seq_text": str(seg.seq),
+         "dep_utc": iso(c.dep_utc), "arr_utc": iso(c.arr_utc),
          "duration_minutes": _fmt_duration(c.duration_minutes)}
         for seg, c in zip(segments, solution)
     ]

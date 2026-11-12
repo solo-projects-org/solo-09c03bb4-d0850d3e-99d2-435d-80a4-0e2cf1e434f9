@@ -10,6 +10,7 @@ from .solver import CsvFormatError, build_export_csv, solve_csv
 
 BASE_DIR = Path(__file__).resolve().parent
 SAMPLE_PATH = BASE_DIR.parent / "samples" / "dst_sample.csv"
+BIG_SEQ_SAMPLE_PATH = BASE_DIR.parent / "samples" / "big_seq_sample.csv"
 INDEX_PATH = BASE_DIR / "static" / "index.html"
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
 
@@ -36,6 +37,13 @@ async def sample():
     """内置夏令时样例，可直接下载或在前端一键载入。"""
     return FileResponse(SAMPLE_PATH, media_type="text/csv; charset=utf-8",
                         filename="dst_sample.csv")
+
+
+@app.get("/api/sample/big-seq", include_in_schema=False)
+async def big_seq_sample():
+    """大序号（int64）样例：用于核对十进制序号展示与唯一解高亮。"""
+    return FileResponse(BIG_SEQ_SAMPLE_PATH, media_type="text/csv; charset=utf-8",
+                        filename="big_seq_sample.csv")
 
 
 @app.post("/api/solve")
